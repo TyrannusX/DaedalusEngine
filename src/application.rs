@@ -9,7 +9,8 @@ struct State<'a> {
     config: wgpu::SurfaceConfiguration,
     size: winit::dpi::PhysicalSize<u32>,
     clear_color: wgpu::Color,
-    window: &'a Window
+    window: &'a Window,
+    render_pipeline: wgpu::RenderPipeline
 }
 
 impl State<'_> {
@@ -64,6 +65,73 @@ impl State<'_> {
         };
         surface.configure(&device, &config);
 
+        // Configure the render pipeline
+        let shader = device.create_shader_module(wgpu::include_wgsl!("shader.wgsl"));
+        let render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Render Pipeline Layout"),
+            bind_group_layouts: &[],
+            push_constant_ranges: &[],
+        });
+        let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Render Pipeline"),
+            layout: Some(&render_pipeline_layout),
+
+            // Configure the vertex stage
+            vertex: wgpu::VertexState {
+                // The shader module containing the shader source code
+                module: &shader,
+
+                // The entry point function to run
+                entry_point: "vs_main",
+
+                // Types of vertices to pass
+                buffers: &[],
+            },
+
+            // Configure the fragment stage (this is an Option<> type since it's optional)
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: "fs_main",
+
+                // The color outputs
+                targets: &[Some(wgpu::ColorTargetState {
+                    // The first output which is just using the surface texture view format
+                    format: config.format,
+
+                    // Replace old pixel data with new data each frame
+                    blend: Some(wgpu::BlendState::REPLACE),
+
+                    // Write all colors (RGBA)
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+
+            // Configures the interpretation of the vertices when converting them into a primitive (such as a triangle)
+            primitive: wgpu::PrimitiveState {
+                // This means every 3 vertices corresponds to a single traingle
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+
+                // These two fields configure the culling (whether or not the primitives show up in the final rendered output)
+                // in this case CCW means the triangle is "front facing" if the vertices are arranged in counter clockwise direction
+                // and "Back" means to cull triangles that are facing "back"
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: Some(wgpu::Face::Back),
+
+
+                polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState {
+                count: 1,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+            multiview: None,
+        });
+
         State {
             surface,
             device,
@@ -78,7 +146,10 @@ impl State<'_> {
                 r: 0.1,
                 g: 0.2,
                 b: 0.3,
-            }
+            },
+
+            // The render pipeline
+            render_pipeline
         }
     }
 
@@ -126,7 +197,7 @@ impl State<'_> {
         // defining an extra block because we want the borrowing of "encoder" to be short lived
         {
             // The render pass (basically runs the graphics pipeline)
-            let _render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 // Name for the render pass
                 label: Some("Render Pass"),
 
@@ -150,6 +221,12 @@ impl State<'_> {
                 occlusion_query_set: None,
                 timestamp_writes: None
             });
+            
+            // Sets the render pipeline for the render pass
+            render_pass.set_pipeline(&self.render_pipeline);
+
+            // Draws primitives
+            render_pass.draw(0..3, 0..1);
         }
 
         // Publish and process the command
