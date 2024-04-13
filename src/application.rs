@@ -1,7 +1,67 @@
+use wgpu::{util::DeviceExt, BufferUsages};
 use winit::{
     dpi::PhysicalPosition, event::{Event, KeyEvent, WindowEvent}, event_loop::EventLoop, keyboard::{KeyCode, PhysicalKey}, window::{Window, WindowBuilder}
 };
 
+// Represents a vertex (point in 3D space)
+// needs to derive Copy so it can be copied into the buffer
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct Vertex {
+    // The XYZ position array
+    position: [f32; 3],
+
+    // The RGB color array
+    color: [f32; 3],
+}
+
+impl Vertex {
+    fn desc() -> wgpu::VertexBufferLayout<'static> {
+        wgpu::VertexBufferLayout {
+            // Defines how "wide" the vertex is in memory
+            array_stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
+
+            // Each element represents vertex data
+            step_mode: wgpu::VertexStepMode::Vertex,
+
+            attributes: &[
+                wgpu::VertexAttribute {
+                    // Offset (in bytes) before the attributes start
+                    offset: 0,
+
+                    // location to store the attribute at (location(0) in this case)
+                    shader_location: 0,
+
+                    // Shape of the attribute (corresponds to a 3 element 32-bit float vector)
+                    format: wgpu::VertexFormat::Float32x3
+                },
+                wgpu::VertexAttribute {
+                    offset: std::mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
+                    shader_location: 1,
+                    format: wgpu::VertexFormat::Float32x3
+                },
+            ],
+        }
+    }
+}
+
+// A front facing triangle (to avoid being culled)
+const VERTICES: &[Vertex] = &[
+    Vertex { position: [-0.0868241, 0.49240386, 0.0], color: [0.5, 0.0, 0.5] }, // A
+    Vertex { position: [-0.49513406, 0.06958647, 0.0], color: [0.5, 0.0, 0.5] }, // B
+    Vertex { position: [-0.21918549, -0.44939706, 0.0], color: [0.5, 0.0, 0.5] }, // C
+    Vertex { position: [0.35966998, -0.3473291, 0.0], color: [0.5, 0.0, 0.5] }, // D
+    Vertex { position: [0.44147372, 0.2347359, 0.0], color: [0.5, 0.0, 0.5] }, // E
+];
+
+// Indices to access repeated vertex data efficiently
+const INDICES: &[u16] = &[
+    0,1,4,
+    1,2,4,
+    2,3,4,
+];
+
+// Represents the application state
 struct State<'a> {
     surface: wgpu::Surface<'a>,
     device: wgpu::Device,
@@ -10,7 +70,11 @@ struct State<'a> {
     size: winit::dpi::PhysicalSize<u32>,
     clear_color: wgpu::Color,
     window: &'a Window,
-    render_pipeline: wgpu::RenderPipeline
+    render_pipeline: wgpu::RenderPipeline,
+    vertex_buffer: wgpu::Buffer,
+    num_vertices: u32,
+    index_buffer: wgpu::Buffer,
+    num_indices: u32,
 }
 
 impl State<'_> {
@@ -84,8 +148,10 @@ impl State<'_> {
                 // The entry point function to run
                 entry_point: "vs_main",
 
-                // Types of vertices to pass
-                buffers: &[],
+                // Describes the layout of the buffer
+                buffers: &[
+                    Vertex::desc(),
+                ],
             },
 
             // Configure the fragment stage (this is an Option<> type since it's optional)
@@ -132,6 +198,23 @@ impl State<'_> {
             multiview: None,
         });
 
+        // Use the device to create a vertex buffer to store vertex data
+        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Vertex Buffer"),
+            contents: bytemuck::cast_slice(VERTICES),
+            usage: wgpu::BufferUsages::VERTEX
+        });
+
+        // use the device to create a index buffer to store index data, which will be used to access repeated vertex data
+        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Index Buffer"),
+            contents: bytemuck::cast_slice(INDICES),
+            usage: wgpu::BufferUsages::INDEX
+        });
+
+        let num_vertices = VERTICES.len() as u32;
+        let num_indices = INDICES.len() as u32;
+
         State {
             surface,
             device,
@@ -149,7 +232,12 @@ impl State<'_> {
             },
 
             // The render pipeline
-            render_pipeline
+            render_pipeline,
+
+            vertex_buffer,
+            num_vertices,
+            index_buffer,
+            num_indices,
         }
     }
 
@@ -225,8 +313,14 @@ impl State<'_> {
             // Sets the render pipeline for the render pass
             render_pass.set_pipeline(&self.render_pipeline);
 
+            // Set the vertex buffer before drawing
+            render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+
+            // Set the index buffer before drawing
+            render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+
             // Draws primitives
-            render_pass.draw(0..3, 0..1);
+            render_pass.draw_indexed(0..self.num_indices, 0, 0..1);
         }
 
         // Publish and process the command
